@@ -1,0 +1,49 @@
+diff --git a/uclient-http.c b/uclient-http.c
+index 04ddcb9..5c096ad 100644
+--- a/uclient-http.c
++++ b/uclient-http.c
+@@ -106,6 +106,7 @@ struct uclient_http {
+ 	bool eof;
+ 	bool connection_close;
+ 	bool disconnect;
++	bool raw_body;
+ 	enum request_type req_type;
+ 	enum http_state state;
+ 
+@@ -706,10 +707,14 @@ uclient_http_send_headers(struct uclient_http *uh)
+ 		url->port ? ":" : "",
+ 		url->port ? url->port : "");
+ 
+-	blobmsg_for_each_attr(cur, uh->headers.head, rem)
++	uh->raw_body = false;
++	blobmsg_for_each_attr(cur, uh->headers.head, rem) {
++		if (!strcasecmp(blobmsg_name(cur), "Content-Length"))
++			uh->raw_body = true;
+ 		ustream_printf(uh->us, "%s: %s\r\n", blobmsg_name(cur), (char *) blobmsg_data(cur));
++	}
+ 
+-	if (uclient_request_supports_body(uh->req_type))
++	if (uclient_request_supports_body(uh->req_type) && !uh->raw_body)
+ 		ustream_printf(uh->us, "Transfer-Encoding: chunked\r\n");
+ 
+ 	err = uclient_http_add_auth_header(uh);
+@@ -1156,7 +1161,9 @@ uclient_http_send_data(struct uclient *cl, const char *buf, unsigned int len)
+ 	if (err)
+ 		return err;
+ 
+-	if (len > 0) {
++	if (len > 0 && uh->raw_body) {
++		ustream_write(uh->us, buf, len, false);
++	} else if (len > 0) {
+ 		ustream_printf(uh->us, "%X\r\n", len);
+ 		ustream_write(uh->us, buf, len, false);
+ 		ustream_printf(uh->us, "\r\n");
+@@ -1178,7 +1185,7 @@ uclient_http_request_done(struct uclient *cl)
+ 	if (err)
+ 		return err;
+ 
+-	if (uclient_request_supports_body(uh->req_type))
++	if (uclient_request_supports_body(uh->req_type) && !uh->raw_body)
+ 		ustream_printf(uh->us, "0\r\n\r\n");
+ 	uh->state = HTTP_STATE_REQUEST_DONE;
+ 
